@@ -28,7 +28,7 @@ if [[ "\$1 \$2" == "im +messages-reply" ]]; then
   while [[ \$# -gt 0 ]]; do case "\$1" in
     --message-id) mid="\$2"; shift 2;; --text) mode=text; body="\$2"; shift 2;;
     --markdown) mode=markdown; body="\$2"; shift 2;; --file) mode=file; body="\$2"; shift 2;; *) shift;; esac; done
-  echo "REPLY mid=\$mid mode=\$mode" >> "$TMP/replies.log"
+  echo "REPLY mid=\$mid mode=\$mode body=\${body:0:24}" >> "$TMP/replies.log"
   echo '{"ok":true,"data":{"message_id":"om_reply"}}'   # 模拟 lark-cli 成功信封(走 stdout)
   exit 0
 fi
@@ -111,6 +111,50 @@ run_bridge 7
 grep -q '"status":"timeout"' "$TMP/state/invocations.jsonl" 2>/dev/null && ok "超时被记为 timeout" || bad "未记录 timeout"
 grep -q 'mode=text' "$TMP/replies.log" 2>/dev/null && ok "回贴了超时提示" || bad "未回贴超时提示"
 if pgrep -f "sleep 4747" >/dev/null 2>&1; then bad "残留孤儿子进程"; pkill -f "sleep 4747"; else ok "无残留孤儿进程"; fi
+
+# ---------------- 测试 C：并发上限（验证 TOCTOU 修复：占位先于后台化）----------------
+echo "[C] 并发上限 / TOCTOU"
+cat > "$TMP/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+sleep 3      # 占住槽位
+echo "慢报告"
+EOF
+chmod +x "$TMP/bin/claude"
+cat > "$TMP/events.ndjson" <<'EOF'
+{"event_id":"c1","message_id":"om_c1","chat_id":"oc_good","sender_id":"ou_alice","content":"@TestBot 任务1"}
+{"event_id":"c2","message_id":"om_c2","chat_id":"oc_good","sender_id":"ou_alice","content":"@TestBot 任务2"}
+EOF
+mk_lark_stub "$TMP/events.ndjson"
+base_cfg 'export MAX_CONCURRENCY=1'
+run_bridge 6
+busy=$(grep -c '正忙' "$TMP/replies.log" 2>/dev/null); busy=${busy:-0}
+runs=$(grep -c '"status":"ok"' "$TMP/state/invocations.jsonl" 2>/dev/null); runs=${runs:-0}
+[ "$busy" -ge 1 ] && ok "并发满时第2个被挡（忙线回复）—— TOCTOU 不漏放行" || bad "未出现忙线回复"
+[ "$runs" = "1" ]  && ok "同一时刻只跑 1 个"                                || bad "并发应为1，实际 ok=$runs"
+
+# ---------------- 测试 D：审计 JSON 转义（特殊字符不产出非法 JSON）----------------
+echo "[D] 审计 JSON 转义"
+printf '#!/usr/bin/env bash\necho "报告OK"\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+# content 里塞引号 / 反斜杠 / 反引号 —— 老的 sed/awk 拼接易在这里产出非法 JSON
+printf '%s\n' '{"event_id":"d1","message_id":"om_d1","chat_id":"oc_good","sender_id":"ou_alice","content":"@TestBot 分析 \"季度\" 数据 \\ 路径 C:\\x 还有`反引号`"}' > "$TMP/events.ndjson"
+mk_lark_stub "$TMP/events.ndjson"
+base_cfg ""
+run_bridge 4
+if jq -e . "$TMP/state/invocations.jsonl" >/dev/null 2>&1; then ok "含特殊字符的审计行仍是合法 JSON"; else bad "审计 JSON 非法"; fi
+
+# ---------------- 测试 E：启动清理过期状态文件（防无限增长）----------------
+echo "[E] 启动清理过期 seen/counter"
+printf '#!/usr/bin/env bash\necho ok\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+: > "$TMP/events.ndjson"        # 不发事件，只验证启动清理
+mk_lark_stub "$TMP/events.ndjson"
+base_cfg 'export STATE_TTL_DAYS=7'
+mkdir -p "$TMP/state/seen"
+touch -t 202501010000 "$TMP/state/seen/old_event" "$TMP/state/counter.2025-01-01"
+touch "$TMP/state/seen/fresh_event"
+run_bridge 3
+[ ! -e "$TMP/state/seen/old_event" ]       && ok "过期 seen 文件被清理"   || bad "过期 seen 未清理"
+[ ! -e "$TMP/state/counter.2025-01-01" ]   && ok "过期 counter 被清理"    || bad "过期 counter 未清理"
+[ -e "$TMP/state/seen/fresh_event" ]       && ok "新文件保留（不误删）"   || bad "误删了新文件"
 
 echo
 echo "==== 结果：PASS=$PASS  FAIL=$FAIL ===="

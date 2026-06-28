@@ -49,6 +49,8 @@ export MAX_CONCURRENCY=2         # 同时在跑的分析数
 export DAILY_CAP=50              # 每日触发上限
 export CONSUME_TIMEOUT="30m"     # consume 单轮时长，到点重启
 export REPLY_FILE_THRESHOLD=3000 # 报告超过此字符数转文件上传
+export STATE_TTL_DAYS=7          # 启动时清理 N 天前的 seen/counter（防状态文件无限增长）
+export ERR_LOG_KEEP_LINES=2000   # 启动时把 *.err 截到最后 N 行（防日志涨到 GB）
 
 # headless 工具收口（核心安全项！）。⚠️ 必须是 bash 数组，不能是字符串——否则带空格的
 # --allowedTools 值会被错误拆词。⚠️ 别放开整个 Bash（白名单内用户可借 prompt 注入跑任意 shell）：
