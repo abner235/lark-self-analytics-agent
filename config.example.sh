@@ -27,6 +27,11 @@ export ALLOWED_SENDERS=""
 # owner 的 open_id：cookie 过期/取数失败时回贴里 @ 他提醒重登
 export OWNER_AT=""
 
+# @检测：留空 = 用 BOT_NAME 子串匹配（默认）。lark-cli 把结构化 mentions 抹掉了、@已渲染进
+# content 文本，所以只能按文本匹配。想降误触发就抓一条真实 @ 事件看渲染形态（SETUP 第2步末），
+# 再设成精确正则（grep -iE），如 MENTION_MATCH='@?BI-YourName'
+export MENTION_MATCH=""
+
 # headless Agent 的工作目录（必须能 Skill 调用到本人的 mc-query / datawind）
 export WORKDIR="$HOME"
 
@@ -46,10 +51,11 @@ export CONSUME_TIMEOUT="30m"     # consume 单轮时长，到点重启
 export REPLY_FILE_THRESHOLD=3000 # 报告超过此字符数转文件上传
 
 # headless 工具收口（核心安全项！）。⚠️ 必须是 bash 数组，不能是字符串——否则带空格的
-# --allowedTools 值会被错误拆词。默认放 Bash 是因为 mc-query/datawind 多半要跑各自 CLI；
-# 强烈建议按 `claude --help` 的实际语法收成 scoped，禁止任意 shell：
-#   CLAUDE_ARGS=(--allowedTools "Skill Read Grep Glob Bash(mc-query:*) Bash(datawind:*)" --max-turns 30)
-CLAUDE_ARGS=(--allowedTools "Skill Read Grep Glob Bash" --max-turns 30)
+# --allowedTools 值会被错误拆词。⚠️ 别放开整个 Bash（白名单内用户可借 prompt 注入跑任意 shell）：
+# 把 Bash 收口到取数 skill 实际运行的命令前缀。下面是占位，按你 mc-query/datawind 真实跑的命令改：
+#   - 先观察该 skill 实际执行的 bash 命令（看它 SKILL.md / 跑一次看 tool 调用），再照着写前缀
+#   - 注意前缀要和实际命令首 token 完全一致（实测 ./mcq 要写 Bash(./mcq:*)，写 Bash(mcq:*) 不匹配）
+CLAUDE_ARGS=(--allowedTools "Skill Read Grep Glob Bash(mc-query:*) Bash(datawind:*)" --max-turns 30)
 # 可选：固定模型 → CLAUDE_ARGS+=(--model claude-opus-4-8)
 
 # ---- 可选：把调用记录同步进 Lark Base usage_leaderboard（P0 §7 看板）----

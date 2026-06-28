@@ -25,6 +25,12 @@ mc-query / datawind 取数）→ 报告回贴到群。
 | `analysis-agent-prompt.md` | headless 调用注入的受限分析指令 |
 | `com.bi-bridge.plist` | macOS launchd 保活（SIGTERM 优雅停，绝不 kill -9） |
 | `SETUP.md` | 从建机器人到联调的逐步指南 + 验证清单 |
+| `tests/test.sh` | 零依赖回归测试（stub 掉 lark-cli/claude）：护栏 + 去重 + 超时 + 进程清理 |
+
+## 测试
+```bash
+bash tests/test.sh    # 全过返回 0；改 bi-bridge.sh 后跑一遍防回归
+```
 
 ## 核心设计（详见 plan）
 - **去中心化**：每人在本人机器跑自己的实例，用本人凭证 → 每个 Agent 只看本人有权数据，合规边界=个人边界。

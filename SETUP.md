@@ -94,7 +94,22 @@ chmod +x bi-bridge.sh
 
 ---
 
+## 可选：收紧 @检测（降误触发）
+默认按 `BOT_NAME` 子串匹配——机器人名恰好出现在普通文本里会误触发。lark-cli 把结构化
+mentions 抹掉了（@已渲染进 `content` 文本），所以只能按文本匹配。想收紧就先抓一条**真实
+@ 事件**看渲染形态，再设精确正则 `MENTION_MATCH`：
+```bash
+# 抓 1 条真实事件：跑这个命令后在群里 @ 一下机器人，看打印出的 content 长什么样
+lark-cli event consume im.message.receive_v1 --as bot --max-events 1 --timeout 60s \
+  < <(tail -f /dev/null) --jq 'select(.message_type=="text")|.content'
+# 看清 @ 的真实渲染（带不带 @、有没有空格）后，在 config 里设：
+#   export MENTION_MATCH='@?你的机器人名'
+```
+
+---
+
 ## 已知边界（V1 诚实标注）
-- **@检测靠机器人显示名字符串匹配**（飞书把 @提及渲染成显示名，不是结构化 tag）。若机器人名恰好出现在普通文本里会误触发；V1 可接受，V2 改结构化判定。
+- **@检测只能按文本匹配**（lark-cli 抹掉了结构化 mentions，@已渲染成显示名文本）。默认子串匹配，可用 `MENTION_MATCH` 正则收紧（见上）；无法按 bot open_id 精确判定。
+- **去重用 `event_id`**（schema 标注 dedup-safe），同一事件重投只跑一次。
 - **笔记本休眠/关机 = 离线**：靠优雅报错 + 自选常开 host 化解，不靠中心化。
 - **这是 V1**：人工 @ 指定机器人，无自动路由、无 Agent 自主互调。那是 V2。
