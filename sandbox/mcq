@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# mc-query sandbox CLI —— 模拟 mc-query 对 MaxCompute 取数：传入 SQL，返回结果。
+# 实际跑在本地 sqlite（banxa.db）上，方言基本兼容（SELECT/JOIN/GROUP BY/CASE WHEN）。
+# 用法：  mcq "SELECT ds, SUM(users) FROM banxa_funnel WHERE stage='created' GROUP BY ds"
+set -o pipefail
+DB="$(cd "$(dirname "$0")" && pwd)/banxa.db"
+sql="$*"
+if [[ -z "$sql" ]]; then
+  echo "用法: mcq \"<SQL>\"" >&2
+  echo "可用表: banxa_funnel(ds, country, pay_method, stage, users)" >&2
+  echo "stage 取值(漏斗顺序): created → kyc_passed → pay_submitted → pay_authorized → completed" >&2
+  exit 2
+fi
+[[ -f "$DB" ]] || { echo "找不到 banxa.db，请先运行 build_db.py" >&2; exit 1; }
+sqlite3 -header -column "$DB" "$sql"

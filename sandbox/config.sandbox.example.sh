@@ -1,0 +1,26 @@
+# bi-bridge sandbox 配置（示例）——复制成 config.sandbox.sh 后填入你自己的真实值。
+#   cp config.sandbox.example.sh config.sandbox.sh && vim config.sandbox.sh
+# config.sandbox.sh 已被 .gitignore，不会进仓库（含真实群/用户 ID）。
+# 用法： ../bi-bridge.sh ./sandbox/config.sandbox.sh
+SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 自动解析为本文件所在目录，可移植
+
+export BOT_NAME="你的机器人显示名"                               # @检测匹配的显示名，如 "BI-Charlie"
+export ALLOWED_GROUPS="oc_xxxxxxxxxxxxxxxxxxxxxxxxx"              # 群 chat_id；lark-cli im +chat-search 查
+export ALLOWED_SENDERS="ou_xxxxxxxxxxxxxxxxxxxxxxxxx"            # 只允许此人触发（防群内误触发烧额度）；留空=群内任何人
+export OWNER_AT="ou_xxxxxxxxxxxxxxxxxxxxxxxxx"                  # cookie 过期/取数失败时 @ 的 owner open_id
+
+export WORKDIR="$SANDBOX_DIR"                                    # 让 headless 能加载 project skill + mcq
+export ANALYSIS_PROMPT_FILE="$SANDBOX_DIR/analysis-agent-prompt.sandbox.md"
+export STATE_DIR="$HOME/.bi-bridge-sandbox"
+
+# headless 工具收口（sandbox：允许 Bash 跑 mcq）。数组语法！
+CLAUDE_ARGS=(--allowedTools "Bash Read Glob Grep Skill" --max-turns 30)
+
+export TASK_TIMEOUT_SECS=300
+export MAX_CONCURRENCY=2
+export DAILY_CAP=50
+export CONSUME_TIMEOUT="30m"
+export LARK_AS="bot"
+export LARK_EXTRA=""
+export LARK_BIN="lark-cli"
+export CLAUDE_BIN="claude"
