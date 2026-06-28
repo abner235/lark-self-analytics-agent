@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   launchd 配置：保活 bi-bridge，崩溃/退出后自动重启。
-  安装（把下面占位路径改成你的真实路径后）：
-    cp com.osl.bi-bridge.plist ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist
-    # 编辑里面的 __PATHS__，把 Label 改成带你名字的唯一值（多机器人时避免冲突）
-    launchctl load   ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist   # 启动
-    launchctl unload ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist   # 优雅停（发 SIGTERM，不会 kill -9，订阅不泄漏）
+  安装（把下面占位 __REPO__ / __ANALYST__ 改成你的真实值后）：
+    cp com.bi-bridge.plist ~/Library/LaunchAgents/com.bi-bridge.me.plist
+    # 编辑里面的 __REPO__（仓库根的绝对路径）、Label 改成带你名字的唯一值（多机器人时避免冲突）
+    launchctl load   ~/Library/LaunchAgents/com.bi-bridge.me.plist   # 启动
+    launchctl unload ~/Library/LaunchAgents/com.bi-bridge.me.plist   # 优雅停（发 SIGTERM，不会 kill -9，订阅不泄漏）
 
   注意：
   - launchd 默认 StandardInput=null，会让 consume 立即收到 EOF。本脚本用 --timeout
@@ -16,13 +16,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.osl.bi-bridge.__ANALYST__</string>
+    <string>com.bi-bridge.__ANALYST__</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>__PATH_TO__/bi-skills/bridge/bi-bridge.sh</string>
-        <string>__PATH_TO__/bi-skills/bridge/config.__ANALYST__.sh</string>
+        <string>__REPO__/bi-bridge.sh</string>
+        <string>__REPO__/config.__ANALYST__.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -38,9 +38,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__PATH_TO__/.bi-bridge/launchd.out.log</string>
+    <string>__REPO__/.bi-bridge/launchd.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__PATH_TO__/.bi-bridge/launchd.err.log</string>
+    <string>__REPO__/.bi-bridge/launchd.err.log</string>
 
     <!-- 崩溃后重启的最小间隔，防抖 -->
     <key>ThrottleInterval</key>

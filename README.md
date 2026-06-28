@@ -1,7 +1,11 @@
-# bi-bridge — BI 团队 Agent 互联互通（飞书机器人 = 中间总线）V1
+# lark-self-analytics-agent (bi-bridge)
+
+> 飞书机器人当总线，把"群里 @ 一句话"变成一次本机自助数据分析：去中心化、各用本人凭证、headless Agent 取数出洞察。
 
 群里 `@你的机器人 + 一句话分析问题` → 触发本机 headless 分析 Agent（调你本人的
-mc-query / datawind 取数）→ 报告回贴到群。这是 P0 蒸馏平台里 **L3 触达层** 的可执行落地。
+mc-query / datawind 取数）→ 报告回贴到群。
+
+> 许可证：[MIT](LICENSE)。
 
 ```
 飞书群 @个人机器人 ──im.message.receive_v1──▶ lark-cli event consume
@@ -19,7 +23,7 @@ mc-query / datawind 取数）→ 报告回贴到群。这是 P0 蒸馏平台里 
 | `bi-bridge.sh` | 守护进程主体（消费循环 + 护栏 + 触发 headless + 回贴 + 记账） |
 | `config.example.sh` | 配置模板，复制成 `config.<你的名>.sh` 填写后 source |
 | `analysis-agent-prompt.md` | headless 调用注入的受限分析指令 |
-| `com.osl.bi-bridge.plist` | macOS launchd 保活（SIGTERM 优雅停，绝不 kill -9） |
+| `com.bi-bridge.plist` | macOS launchd 保活（SIGTERM 优雅停，绝不 kill -9） |
 | `SETUP.md` | 从建机器人到联调的逐步指南 + 验证清单 |
 
 ## 核心设计（详见 plan）

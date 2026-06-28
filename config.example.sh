@@ -1,13 +1,13 @@
 # =============================================================================
 # bi-bridge 配置示例 —— 复制成 config.<你的名字>.sh 后填写，再 source 启动。
-#   cp config.example.sh config.charlie.sh && vim config.charlie.sh
-#   ./bi-bridge.sh ./config.charlie.sh
+#   cp config.example.sh config.me.sh && vim config.me.sh
+#   ./bi-bridge.sh ./config.me.sh
 # 这是个被 bash source 的文件（零依赖，不需要 yq）。注意别把它提交进公共 repo。
 # =============================================================================
 
 # ---- 必填 ----
 # 机器人显示名：群里 @ 出来在 .content 里渲染成的那串名字（@检测靠它）
-export BOT_NAME="BI-Charlie"
+export BOT_NAME="BI-YourName"
 
 # 受限分析指令文件（headless Agent 的 system prompt 追加内容）
 export ANALYSIS_PROMPT_FILE="$HOME/bi-skills/bridge/analysis-agent-prompt.md"
@@ -34,8 +34,8 @@ export WORKDIR="$HOME"
 # 一个 lark-cli profile = 一个 bot appId。若你的 lark-cli 版本用独立 config 路径或
 # profile 名来区分机器人，把对应参数放这里透传给每条 lark-cli 命令。
 # 例（按你的实际版本二选一，用 `lark-cli config --help` 确认）：
-#   export LARK_EXTRA="--config $HOME/.lark/bi-charlie.json"
-#   export LARK_EXTRA="--profile bi-charlie"
+#   export LARK_EXTRA="--config $HOME/.lark/bi-yourname.json"
+#   export LARK_EXTRA="--profile bi-yourname"
 export LARK_EXTRA=""
 
 # ---- 护栏（有默认值，按需覆盖）----

@@ -4,7 +4,7 @@
 # 用法： ../bi-bridge.sh ./sandbox/config.sandbox.sh
 SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 自动解析为本文件所在目录，可移植
 
-export BOT_NAME="你的机器人显示名"                               # @检测匹配的显示名，如 "BI-Charlie"
+export BOT_NAME="你的机器人显示名"                               # @检测匹配的显示名，如 "BI-YourName"
 export ALLOWED_GROUPS="oc_xxxxxxxxxxxxxxxxxxxxxxxxx"              # 群 chat_id；lark-cli im +chat-search 查
 export ALLOWED_SENDERS="ou_xxxxxxxxxxxxxxxxxxxxxxxxx"            # 只允许此人触发（防群内误触发烧额度）；留空=群内任何人
 export OWNER_AT="ou_xxxxxxxxxxxxxxxxxxxxxxxxx"                  # cookie 过期/取数失败时 @ 的 owner open_id

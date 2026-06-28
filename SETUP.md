@@ -8,7 +8,7 @@
 ---
 
 ## 第 1 步：建一个飞书机器人（应用）
-1. 飞书开发者后台 → 创建企业自建应用（每个分析师一个，名字带本人标识，如 `BI-Charlie`）。
+1. 飞书开发者后台 → 创建企业自建应用（每个分析师一个，名字带本人标识，如 `BI-<你的名>`）。
 2. 开通 bot scope（`--as bot` 不需要 auth login，只要后台开 scope）：
    - 收消息事件：`im:message`（接收 `im.message.receive_v1`）
    - 发消息：`im:message:send`（回贴）
@@ -24,7 +24,7 @@
 ## 第 2 步：把这个机器人绑成本机 lark-cli 的一个 profile
 - 关键事实：**一个 lark-cli profile = 一个 bot appId，同一个 bot 的事件只投递给一个消费进程**。所以「一人一机器人、各自本机消费」是唯一干净模型。
 - 用 `lark-cli config init` / `lark-cli config --help` 把本机器人的 appId/appSecret 配进来。
-- **确认 profile 选择语法**：跑 `lark-cli config --help`，看你的版本是用独立 config 文件路径还是 profile 名来区分多机器人，然后把对应参数填进 config 的 `LARK_EXTRA`（如 `--config ~/.lark/bi-charlie.json` 或 `--profile bi-charlie`）。脚本会把 `LARK_EXTRA` 透传给每条 lark-cli 命令。
+- **确认 profile 选择语法**：跑 `lark-cli config --help`，看你的版本是用独立 config 文件路径还是 profile 名来区分多机器人，然后把对应参数填进 config 的 `LARK_EXTRA`（如 `--config ~/.lark/bi-yourname.json` 或 `--profile bi-yourname`）。脚本会把 `LARK_EXTRA` 透传给每条 lark-cli 命令。
 - 验证身份：`lark-cli im +chat-list --as bot $LARK_EXTRA` 能列出机器人所在的群即可。
 
 ---
@@ -32,11 +32,10 @@
 ## 第 3 步：写受限分析指令 + 手动验证「单点能答好」（真正的 gate）
 这一步过不了就别往下做管道——bridge 只是管道，报告质量才是成败。
 1. 看 `analysis-agent-prompt.md`，按你的业务/口径微调（引用你们的 L1 metric id、dashboard 名等）。
-2. 在 `WORKDIR` 下手动跑一次 headless，确认能取到数、报告过关：
+2. 在 `WORKDIR` 下手动跑一次 headless，确认能取到数、报告过关（下面在仓库根目录执行）：
    ```bash
-   cd "$HOME"   # = 你 config 里的 WORKDIR
    claude -p "帮我分析下 Banxa 业务昨天的转化率为什么下降？" \
-     --append-system-prompt "$(cat ~/bi-skills/bridge/analysis-agent-prompt.md)" \
+     --append-system-prompt "$(cat ./analysis-agent-prompt.md)" \
      --allowedTools "Skill Read Grep Glob Bash" --max-turns 30
    ```
 3. 看它是否真的调了 mc-query/datawind、数对不对、报告你自己会不会点头。**不满意先改 prompt / skill，别急着上 bridge。**
@@ -44,31 +43,31 @@
 ---
 
 ## 第 4 步：配置并启动 bridge
+在仓库根目录执行：
 ```bash
-cd ~/bi-skills/bridge
-cp config.example.sh config.charlie.sh
-vim config.charlie.sh      # 填 BOT_NAME / ALLOWED_GROUPS(chat_id) / LARK_EXTRA / OWNER_AT 等
+cp config.example.sh config.me.sh
+vim config.me.sh           # 填 BOT_NAME / ALLOWED_GROUPS(chat_id) / LARK_EXTRA / OWNER_AT 等
 # 找 chat_id：lark-cli im +chat-search --query "你的BI群名" --as bot $LARK_EXTRA
 # 找 open_id：lark-cli contact +search-user --query "姓名" --as user
 
 chmod +x bi-bridge.sh
-./bi-bridge.sh ./config.charlie.sh        # 前台先跑，看日志（stderr）
+./bi-bridge.sh ./config.me.sh             # 前台先跑，看日志（stderr）
 ```
-在测试群 `@BI-Charlie 分析下昨天 Banxa 转化率` → 应看到「收到，开始分析…」→ 稍后收到报告。
+在测试群 `@你的机器人 分析下昨天 Banxa 转化率` → 应看到「收到，开始分析…」→ 稍后收到报告。
 
 ---
 
 ## 第 5 步：保活（launchd）
 前台验证 OK 后转后台常驻：
-1. 编辑 `com.osl.bi-bridge.plist`：把 `__ANALYST__` 改成你的名、`__PATH_TO__` 改成真实路径、`PATH` 改成能找到 `lark-cli/claude/jq` 的路径。
+1. 编辑 `com.bi-bridge.plist`：把 `__ANALYST__` 改成你的名、`__REPO__` 改成仓库根的绝对路径、`PATH` 改成能找到 `lark-cli/claude/jq` 的路径。
 2. 安装：
    ```bash
-   cp com.osl.bi-bridge.plist ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist
-   launchctl load ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist
+   cp com.bi-bridge.plist ~/Library/LaunchAgents/com.bi-bridge.me.plist
+   launchctl load ~/Library/LaunchAgents/com.bi-bridge.me.plist
    ```
 3. 停服（**优雅 SIGTERM，不会 kill -9，订阅不泄漏**）：
    ```bash
-   launchctl unload ~/Library/LaunchAgents/com.osl.bi-bridge.charlie.plist
+   launchctl unload ~/Library/LaunchAgents/com.bi-bridge.me.plist
    ```
 
 > 在意「常开」的人：把这套跑在你自己的一台常开小机器 / 云 VM 上（**仍是你本人的凭证、你本人的数据域**），既保留去中心化权限隔离，又拿到 uptime。
