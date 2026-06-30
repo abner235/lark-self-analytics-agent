@@ -1,0 +1,23 @@
+# Banxa 转化漏斗分析 Runbook
+name: banxa-funnel
+description: 转化漏斗分析：转化率计算、阶段拆解、维度下钻、异常归因
+tables: [Banxa转化漏斗]
+exemplars: [banxa_funnel]
+triggers: [转化率, 漏斗, 各阶段, 哪一步, 通过率, 流失, 掉了, 下跌, 转化, KYC, kyc, 授权, funnel, conversion]
+
+analysis: |
+  ## 分析框架（转化漏斗）
+
+  漏斗阶段顺序：created → kyc_passed → pay_submitted → pay_authorized → completed
+  整体转化率 = completed 的用户数 / created 的用户数
+  某步通过率 = 下一阶段用户数 / 上一阶段用户数
+
+  分析路径（按需裁剪，不要机械走完）：
+  1. 先确认整体转化率是否真的变了（昨天 vs 前几天基线）
+  2. 逐级拆解哪个阶段掉得最多（找最大断层）
+  3. 按维度（支付方式 / 国家）下钻，定位问题集中在谁身上
+  4. 量化每个因素的贡献度，按影响排序
+
+rules: |
+  - 漏斗表每个 (日期, 国家, 支付方式) 组合有 5 行（对应 5 个阶段）。聚合时注意不要把不同阶段混在一起 SUM。
+  - 计算转化率时用 CASE WHEN 在同一 GROUP 内分别 SUM created 和 completed，不要 JOIN 两次漏斗表。

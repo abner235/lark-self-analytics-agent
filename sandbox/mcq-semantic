@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# mcq-semantic — 语义 SQL 包装器
+# 接收中文字段名的 SQL，通过 sql-mapper.py 映射成物理列名，再交给 mcq 执行。
+#
+# 用法: ./mcq-semantic "SELECT 日期, SUM(用户数) FROM Banxa转化漏斗 WHERE 漏斗阶段='created' GROUP BY 日期"
+set -o pipefail
+
+SANDBOX_DIR="$(cd "$(dirname "$0")" && pwd)"
+BRIDGE_DIR="$(dirname "$SANDBOX_DIR")"
+MAPPER="$BRIDGE_DIR/sql-mapper.py"
+
+sql="$*"
+if [[ -z "$sql" ]]; then
+  echo "用法: mcq-semantic \"<语义SQL>\"" >&2
+  exit 2
+fi
+
+# 映射：语义名 → 物理名
+physical_sql=$(python3 "$MAPPER" "$sql")
+if [[ $? -ne 0 ]]; then
+  echo "SQL 映射失败" >&2
+  exit 1
+fi
+
+# 执行物理 SQL
+exec "$SANDBOX_DIR/mcq" "$physical_sql"

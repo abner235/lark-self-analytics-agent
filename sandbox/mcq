@@ -7,7 +7,9 @@ DB="$(cd "$(dirname "$0")" && pwd)/banxa.db"
 sql="$*"
 if [[ -z "$sql" ]]; then
   echo "用法: mcq \"<SQL>\"" >&2
-  echo "可用表: banxa_funnel(ds, country, pay_method, stage, users)" >&2
+  echo "可用表:" >&2
+  echo "  banxa_funnel(ds, country, pay_method, stage, users)" >&2
+  echo "  banxa_orders(ds, country, pay_method, orders, amount_usd, fee_usd)" >&2
   echo "stage 取值(漏斗顺序): created → kyc_passed → pay_submitted → pay_authorized → completed" >&2
   exit 2
 fi

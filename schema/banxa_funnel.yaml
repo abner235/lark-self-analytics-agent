@@ -1,0 +1,76 @@
+# banxa_funnel 语义层定义
+# 物理表 → 语义表的映射。LLM 只看语义名，sql-mapper 负责翻译回物理名。
+#
+# Measure 类型（type 字段）:
+#   sum / count / countDistinct / avg / min / max
+#   sql-validator 会校验 SQL 中的聚合函数是否匹配声明的类型。
+
+table:
+  name: Banxa转化漏斗
+  physical: banxa_funnel
+  comment: Banxa 支付通道的用户转化漏斗数据，按日/国家/支付方式/阶段聚合
+  ai_description: |
+    这张表记录 Banxa 法币入金通道的用户转化漏斗，粒度是 (日期, 国家, 支付方式, 漏斗阶段)。
+    每个 (日期, 国家, 支付方式) 组合对应 5 行数据，分别是 5 个漏斗阶段：created → kyc_passed → pay_submitted → pay_authorized → completed。
+    核心用途：计算各阶段转化率、定位流失环节、按国家或支付方式对比转化效率。
+    关键注意事项：
+    - 查询转化率时，必须在 WHERE 中明确指定要对比的两个阶段，用条件聚合（CASE WHEN stage = 'X'）分别取分子分母，不能直接除。
+    - 和 Banxa订单 表 JOIN 时，必须先用 CTE 或子查询把漏斗表聚合到 (日期, 国家, 支付方式) 粒度，否则会因为 5 行 × 1 行导致数据膨胀 5 倍。
+    - 不要直接 SUM(users) 跨阶段汇总，那是把不同漏斗阶段的人数加在一起，没有业务含义。
+
+joins:
+  - target: Banxa订单
+    relationship: belongsTo
+    keys: [日期, 国家, 支付方式]
+    note: 漏斗表每个key组合有5行(对应5个阶段)，JOIN前需先筛选阶段或用CTE聚合
+
+fields:
+  - name: 日期
+    physical: ds
+    datatype: date
+    format: "yyyy-MM-dd"
+    alias: [数据日期, 分区日期]
+    comment: |
+      数据分区日期，代表该行数据对应的自然日。
+      用于时间范围筛选和趋势分析。格式 yyyy-MM-dd，直接用字符串比较即可（WHERE ds >= '2024-01-01'）。
+
+  - name: 国家
+    physical: country
+    datatype: varchar
+    alias: [地区, 区域]
+    comment: |
+      用户所在国家/地区，存储的是国家英文名称（如 Australia、Brazil）。
+      用于按地区维度对比转化效率。注意不是国家代码（不是 AU、BR），筛选时用英文全名。
+
+  - name: 支付方式
+    physical: pay_method
+    datatype: varchar
+    alias: [支付渠道, 付款方式]
+    comment: |
+      用户选择的支付渠道，小写英文（如 visa、mastercard、pix、sepa、poli）。
+      不同国家可用的支付方式不同。筛选时用小写匹配，不要用中文名称。
+
+  - name: 漏斗阶段
+    physical: stage
+    datatype: varchar
+    alias: [环节, 步骤, 转化阶段]
+    comment: |
+      转化漏斗环节，每行只属于一个阶段。五个阶段按先后顺序排列：
+      created → kyc_passed → pay_submitted → pay_authorized → completed。
+      计算转化率时用条件聚合：SUM(CASE WHEN stage='pay_submitted' THEN users END) / SUM(CASE WHEN stage='created' THEN users END)。
+      不要用 GROUP BY stage 再做行间除法，容易出错。
+    values:
+      - created: 订单创建
+      - kyc_passed: KYC 通过
+      - pay_submitted: 支付提交
+      - pay_authorized: 支付授权
+      - completed: 交易完成
+
+  - name: 用户数
+    physical: users
+    type: sum
+    alias: [人数, 用户量]
+    comment: |
+      该阶段的用户人数，已按 (日期, 国家, 支付方式, 阶段) 预聚合。
+      聚合函数用 SUM。跨日期或跨国家汇总时 SUM(users) 是正确的，但必须同时保留 stage 维度或先用 WHERE 筛选到单一阶段。
+      直接 SUM(users) 不加 stage 筛选会把 5 个阶段的人数混在一起，结果没有业务含义。

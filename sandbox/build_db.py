@@ -45,10 +45,42 @@ con = sqlite3.connect(DB)
 con.execute("""CREATE TABLE banxa_funnel(
     ds TEXT, country TEXT, pay_method TEXT, stage TEXT, users INTEGER)""")
 con.executemany("INSERT INTO banxa_funnel VALUES (?,?,?,?,?)", rows)
+
+# ---- banxa_orders: 成交订单汇总 ----
+# 每个 completed 用户有 ~0.8 笔订单（部分用户多笔），客单价 ~$350，手续费率 ~2.5%
+# 埋点：昨天 visa 因授权失败导致 completed 人数骤降 → 订单数和金额同步下跌
+ORDER_RATE = 0.80       # orders per completed user
+AVG_ORDER_USD = 350.0   # average order size in USD
+FEE_RATE = 0.025        # fee as % of amount
+
+order_rows = []
+for i, ds in enumerate(DAYS):
+    total = daily_total(i)
+    for c, cw in COUNTRIES.items():
+        for m, mw in METHODS.items():
+            created = round(total * cw * mw)
+            kyc = round(created * R["kyc_passed"])
+            sub = round(kyc * R["pay_submitted"])
+            r_auth = 0.45 if (ds == INCIDENT_DAY and m == "visa") else R["pay_authorized"]
+            auth = round(sub * r_auth)
+            comp = round(auth * R["completed"])
+
+            orders = round(comp * ORDER_RATE)
+            # 小幅波动：不同国家客单价有差异
+            country_multiplier = {"SG": 1.2, "AU": 1.1, "HK": 1.0, "JP": 0.85, "GB": 0.95}
+            amount = round(orders * AVG_ORDER_USD * country_multiplier.get(c, 1.0), 2)
+            fee = round(amount * FEE_RATE, 2)
+            order_rows.append((ds, c, m, orders, amount, fee))
+
+con.execute("""CREATE TABLE banxa_orders(
+    ds TEXT, country TEXT, pay_method TEXT,
+    orders INTEGER, amount_usd REAL, fee_usd REAL)""")
+con.executemany("INSERT INTO banxa_orders VALUES (?,?,?,?,?,?)", order_rows)
 con.commit()
 
 # 自检：打印每日整体转化率，确认下跌可见且可归因
-print(f"已写入 {len(rows)} 行 → {DB}\n按日整体转化率(completed/created):")
+print(f"已写入 {len(rows)} 行漏斗 + {len(order_rows)} 行订单 → {DB}")
+print(f"\n按日整体转化率(completed/created):")
 q = """
 SELECT ds,
        SUM(CASE WHEN stage='created'   THEN users END) AS created,
@@ -56,4 +88,9 @@ SELECT ds,
 FROM banxa_funnel GROUP BY ds ORDER BY ds"""
 for ds, cr, cp in con.execute(q):
     print(f"  {ds}  created={cr:5d}  completed={cp:5d}  conv={cp/cr*100:5.1f}%")
+
+print(f"\n按日订单金额:")
+q2 = "SELECT ds, SUM(orders), ROUND(SUM(amount_usd),0) FROM banxa_orders GROUP BY ds ORDER BY ds"
+for ds, o, a in con.execute(q2):
+    print(f"  {ds}  orders={o:5d}  amount=${a:,.0f}")
 con.close()

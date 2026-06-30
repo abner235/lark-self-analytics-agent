@@ -1,0 +1,78 @@
+# bi-bridge eval 测试问题集
+# 每题标注 id、难度、预期特征、涉及的表，用于 eval.py 自动化回归测试。
+#
+# 难度分级：
+#   easy   — 单表、单条件、基础聚合
+#   medium — 多步骤、条件聚合、维度下钻
+#   hard   — 跨表 JOIN、归因分析、边界情况
+
+questions:
+  - id: q1_simple_funnel
+    question: "昨天 Banxa 的整体转化率是多少？"
+    difficulty: easy
+    features: [funnel_calculation, single_table, date_filter]
+    expected_tables: [Banxa转化漏斗]
+    notes: "应计算 completed/created 的比例，用 CASE WHEN 条件聚合"
+
+  - id: q2_stage_breakdown
+    question: "昨天各阶段的通过率分别是多少？哪个阶段流失最大？"
+    difficulty: medium
+    features: [funnel_stages, stage_comparison, conditional_aggregation]
+    expected_tables: [Banxa转化漏斗]
+    notes: "应逐级计算 kyc_passed/created、pay_submitted/kyc_passed 等，并找出最大断层"
+
+  - id: q3_dimension_drill_payment
+    question: "昨天各支付方式的转化率分别是多少？哪个支付方式转化最差？"
+    difficulty: medium
+    features: [funnel_calculation, dimension_drill, group_by]
+    expected_tables: [Banxa转化漏斗]
+    notes: "应按支付方式 GROUP BY，分别算 completed/created"
+
+  - id: q4_trend_7days
+    question: "过去 7 天 Banxa 整体转化率的趋势怎么样？"
+    difficulty: medium
+    features: [funnel_calculation, trend, date_range]
+    expected_tables: [Banxa转化漏斗]
+    notes: "应按日期 GROUP BY，输出 7 天每天的转化率"
+
+  - id: q5_orders_gmv
+    question: "昨天 Banxa 的 GMV 和客单价是多少？按支付方式拆解。"
+    difficulty: easy
+    features: [orders_query, gmv, average_order_value, dimension_drill]
+    expected_tables: [Banxa订单]
+    notes: "客单价=交易金额/订单数，按支付方式 GROUP BY"
+
+  - id: q6_cross_table_join
+    question: "昨天各支付方式的转化率和 GMV 分别是多少？哪个支付方式转化率高但 GMV 低？"
+    difficulty: hard
+    features: [cross_table_join, funnel_calculation, orders_query, cte]
+    expected_tables: [Banxa转化漏斗, Banxa订单]
+    notes: "必须先用 CTE 聚合漏斗表到 (日期, 支付方式) 粒度，再 JOIN 订单表。直接 JOIN 会膨胀 5 倍。"
+
+  - id: q7_anomaly_attribution
+    question: "昨天转化率比前天下降了，帮我找一下主要原因，是哪个支付方式还是哪个国家导致的？"
+    difficulty: hard
+    features: [anomaly_attribution, date_comparison, dimension_drill, multi_step]
+    expected_tables: [Banxa转化漏斗]
+    notes: "应先算两天整体转化率确认下降，再按维度拆解定位最大贡献因子"
+
+  - id: q8_country_drill
+    question: "昨天 Australia 的转化率和订单情况怎么样？"
+    difficulty: medium
+    features: [funnel_calculation, orders_query, country_filter]
+    expected_tables: [Banxa转化漏斗, Banxa订单]
+    notes: "筛选国家用英文全名 Australia，不是 AU"
+
+  - id: q9_boundary_unknown_field
+    question: "昨天各渠道的用户留存率是多少？"
+    difficulty: hard
+    features: [boundary_case, unknown_field, graceful_failure]
+    expected_tables: []
+    notes: "留存率不在 schema 中，Agent 应识别出来并告知用户无法计算，而非编造字段"
+
+  - id: q10_fee_analysis
+    question: "过去 7 天的手续费率趋势怎样？哪个支付方式手续费率最高？"
+    difficulty: medium
+    features: [orders_query, fee_rate, trend, dimension_drill]
+    expected_tables: [Banxa订单]
+    notes: "手续费率=手续费/交易金额，按日期看趋势+按支付方式拆解"

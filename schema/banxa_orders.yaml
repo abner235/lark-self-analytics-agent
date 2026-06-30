@@ -1,0 +1,77 @@
+# banxa_orders 语义层定义
+# Banxa 支付通道的成交订单汇总，和漏斗表共享 (日期, 国家, 支付方式) 维度。
+#
+# Measure 类型（type 字段）:
+#   sum / count / countDistinct / avg / min / max
+
+table:
+  name: Banxa订单
+  physical: banxa_orders
+  comment: Banxa 支付通道的成交订单汇总，按日/国家/支付方式聚合
+  ai_description: |
+    这张表记录 Banxa 法币入金通道的成交订单汇总数据，粒度是 (日期, 国家, 支付方式)。
+    每个 (日期, 国家, 支付方式) 组合只有 1 行，包含订单数、交易金额、手续费三个指标。
+    核心用途：查询成交量、GMV、手续费收入、客单价（amount_usd / orders）、费率（fee_usd / amount_usd）。
+    和 Banxa转化漏斗 表的关系：
+    - 共享 (日期, 国家, 支付方式) 三个维度键。
+    - 本表每个键组合 1 行，漏斗表每个键组合 5 行。JOIN 时必须先把漏斗表聚合到同粒度，或者在漏斗表上 WHERE stage = 'completed' 筛选到单一阶段再 JOIN。
+    - 典型联合查询场景：completed 阶段用户数 vs 实际成交订单数的差异分析、端到端转化率（created 用户数 → 成交订单数）。
+
+joins:
+  - target: Banxa转化漏斗
+    relationship: hasMany
+    keys: [日期, 国家, 支付方式]
+    note: 漏斗表每个key组合有5行(对应5个阶段)，JOIN前需先对漏斗表筛选阶段或用CTE聚合
+
+fields:
+  - name: 日期
+    physical: ds
+    datatype: date
+    format: "yyyy-MM-dd"
+    alias: [数据日期]
+    comment: |
+      数据分区日期，代表该行数据对应的自然日。
+      格式 yyyy-MM-dd，直接用字符串比较即可（WHERE ds >= '2024-01-01'）。
+
+  - name: 国家
+    physical: country
+    datatype: varchar
+    alias: [地区]
+    comment: |
+      用户所在国家/地区，存储的是国家英文名称（如 Australia、Brazil）。
+      筛选时用英文全名，不是国家代码。
+
+  - name: 支付方式
+    physical: pay_method
+    datatype: varchar
+    alias: [支付渠道]
+    comment: |
+      用户选择的支付渠道，小写英文（如 visa、mastercard、pix）。
+      筛选时用小写匹配。
+
+  - name: 订单数
+    physical: orders
+    type: sum
+    alias: [成交笔数, 成交单数]
+    comment: |
+      成交订单数量，已按 (日期, 国家, 支付方式) 预聚合。
+      聚合函数用 SUM，跨行汇总时对预聚合的计数值求和。
+      计算客单价：SUM(amount_usd) / SUM(orders)。不要用 AVG(amount_usd)，那是对已聚合行求均值，含义不同。
+
+  - name: 交易金额
+    physical: amount_usd
+    type: sum
+    alias: [成交金额, 金额, GMV]
+    comment: |
+      成交交易金额，单位美元（USD），已按 (日期, 国家, 支付方式) 预聚合。
+      聚合函数用 SUM。这是法币入金金额，用户用法币购买加密货币的支付总额。
+      计算费率：SUM(fee_usd) / SUM(amount_usd)。注意分母不能为零，建议加 NULLIF。
+
+  - name: 手续费
+    physical: fee_usd
+    type: sum
+    alias: [费用, 佣金]
+    comment: |
+      收取的手续费，单位美元（USD），已按 (日期, 国家, 支付方式) 预聚合。
+      聚合函数用 SUM。这是 Banxa 向用户收取的服务费，是收入侧指标。
+      手续费率 = SUM(fee_usd) / SUM(amount_usd)，通常在 1%-5% 区间。

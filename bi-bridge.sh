@@ -46,15 +46,21 @@ LARK_BIN="${LARK_BIN:-lark-cli}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # headless 调用的附加参数：必须是 bash 数组（config 里用 CLAUDE_ARGS=(...) 定义），
 # 否则带空格的 --allowedTools 值会被错误拆词。工具收口在这里！见 config.example.sh。
-# 默认 fail-closed：不给 Bash，强制由 config 显式授权取数 CLI（如 Bash(./mcq:*) / Bash(mc-query:*)），
-# 防止 prompt 注入把整个 shell 放开。未授权时 agent 取不到数会明确报错，而非拥有任意 shell。
+# 默认 fail-closed：
+#   - 不给 Bash：强制由 config 显式授权取数 CLI（如 Bash(./mcq:*) / Bash(mc-query:*)），
+#     防止 prompt 注入把整个 shell 放开。未授权时 agent 取不到数会明确报错，而非拥有任意 shell。
+#   - 不给 Read/Grep/Glob：WORKDIR 默认 $HOME，这三个工具接受任意绝对路径，群成员一句注入即可
+#     让 agent 读 ~/.lark-cli token / mc-query cookie / ~/.ssh / config.*.sh 并把内容回贴进群
+#     （凭证级泄露）。取数所需的表结构/口径由取数 skill 自己的 SKILL.md 携带，运行时不需要文件读取工具。
+#     若将来要让 agent 读本地 schema/，请用路径收口的 Read(./schema/**) 之类，别全盘放开 Read。
 if [[ -z "${CLAUDE_ARGS+x}" ]]; then
-  CLAUDE_ARGS=(--allowedTools "Skill Read Grep Glob" --max-turns 30)
+  CLAUDE_ARGS=(--allowedTools "Skill" --max-turns 30)
 fi
 TASK_TIMEOUT_SECS="${TASK_TIMEOUT_SECS:-600}"   # 单任务 10min 超时
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-2}"         # 同时在跑的分析数
 DAILY_CAP="${DAILY_CAP:-50}"                    # 每日触发上限（成本/防刷）
 CONSUME_TIMEOUT="${CONSUME_TIMEOUT:-30m}"       # consume 单轮时长，到点优雅退出后重启
+MAX_RETRY="${MAX_RETRY:-1}"                      # 分析失败后自动重试次数（0=不重试）
 BACKOFF_SECS="${BACKOFF_SECS:-5}"               # consume 异常退出后的重启退避
 REPLY_FILE_THRESHOLD="${REPLY_FILE_THRESHOLD:-3000}"  # 报告超过此字符数 → 转文件上传
 STATE_TTL_DAYS="${STATE_TTL_DAYS:-7}"           # 启动时清理 N 天前的 seen/counter（防无限增长）
@@ -100,7 +106,7 @@ run_with_timeout() {
 }
 
 # ---------- 1. 目录与日志 ----------
-mkdir -p "$STATE_DIR/seen" "$STATE_DIR/running"
+mkdir -p "$STATE_DIR/seen" "$STATE_DIR/running" "$STATE_DIR/memory"
 AUDIT_LOG="$STATE_DIR/invocations.jsonl"   # 永久审计 + 喂看板的本地真相源
 log() { printf '%s [bi-bridge] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2; }
 
@@ -180,7 +186,20 @@ log_to_base() {
   return 0
 }
 
-# ---------- 3. 单个任务处理（在后台子进程里跑）----------
+# ---------- 3. 记忆保存（成功报告 → memory/ 目录，供 memory-harvest 提取 exemplars）----------
+save_to_memory() {
+  local mid="$1" task="$2" report="$3"
+  local mem_dir="$STATE_DIR/memory"
+  mkdir -p "$mem_dir"
+  local ts; ts=$(date '+%Y-%m-%dT%H:%M:%S%z')
+  local datestamp; datestamp=$(date '+%Y-%m-%d')
+  printf '%s\n' "$report" > "$mem_dir/${datestamp}_${mid}.md"
+  jq -nc --arg ts "$ts" --arg mid "$mid" --arg q "$task" \
+    '{timestamp:$ts, message_id:$mid, question:$q}' \
+    > "$mem_dir/${datestamp}_${mid}.meta.json"
+}
+
+# ---------- 4. 单个任务处理（含自动重试纠正链）----------
 run_task() {
   local mid="$1" chat="$2" sender="$3" content="$4"
   # marker 由 handle_event 在主循环里同步创建（避免 TOCTOU）；这里只负责退出时清理。
@@ -196,49 +215,85 @@ run_task() {
 
   local sys; sys=$(cat "$ANALYSIS_PROMPT_FILE")
   local out err outf rc start dur
-  start=$(date +%s)
-  err="$STATE_DIR/.err.$mid"
-  outf="$STATE_DIR/.out.$mid"
-  # headless 调用：受限工具（CLAUDE_ARGS 数组）+ 注入分析指令 + 超时兜底
-  if [[ -n "$TIMEOUT_CMD" ]]; then
-    ( cd "$WORKDIR" && "$TIMEOUT_CMD" "$TASK_TIMEOUT_SECS" "$CLAUDE_BIN" -p "$task" \
-        --append-system-prompt "$sys" "${CLAUDE_ARGS[@]}" ) >"$outf" 2>"$err"
-    rc=$?
-  else
-    # 纯 bash 兜底：包一层 cd 后 exec，把 CLAUDE_ARGS 数组原样透传
-    run_with_timeout "$TASK_TIMEOUT_SECS" "$outf" "$err" -- \
-      bash -c 'cd "$1"; shift; exec "$@"' _ "$WORKDIR" \
-        "$CLAUDE_BIN" -p "$task" --append-system-prompt "$sys" "${CLAUDE_ARGS[@]}"
-    rc=$?
-  fi
-  out=$(cat "$outf" 2>/dev/null); rm -f "$outf"
-  dur=$(( $(date +%s) - start ))
+  local attempt=0 last_err="" total_dur=0
 
+  # ---- 纠正链：首次执行 + 失败后自动重试（最多 MAX_RETRY 次）----
+  while (( attempt <= MAX_RETRY )); do
+    attempt=$((attempt + 1))
+    start=$(date +%s)
+    err="$STATE_DIR/.err.$mid"
+    outf="$STATE_DIR/.out.$mid"
+
+    # 构造 prompt：首次用原始任务，重试时追加错误上下文
+    local prompt="$task"
+    if (( attempt > 1 )); then
+      prompt="${task}"$'\n\n---\n【自动重试】上次分析失败，报错如下。请根据报错修正后重试：\n'"${last_err}"
+      log "RETRY mid=$mid attempt=$attempt"
+      reply "$mid" text "⚡ 首次分析遇到问题，正在自动修正重试…"
+    fi
+
+    # headless 调用：受限工具（CLAUDE_ARGS 数组）+ 注入分析指令 + 超时兜底
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+      ( cd "$WORKDIR" && "$TIMEOUT_CMD" "$TASK_TIMEOUT_SECS" "$CLAUDE_BIN" -p "$prompt" \
+          --append-system-prompt "$sys" "${CLAUDE_ARGS[@]}" ) >"$outf" 2>"$err"
+      rc=$?
+    else
+      # 纯 bash 兜底：包一层 cd 后 exec，把 CLAUDE_ARGS 数组原样透传
+      run_with_timeout "$TASK_TIMEOUT_SECS" "$outf" "$err" -- \
+        bash -c 'cd "$1"; shift; exec "$@"' _ "$WORKDIR" \
+          "$CLAUDE_BIN" -p "$prompt" --append-system-prompt "$sys" "${CLAUDE_ARGS[@]}"
+      rc=$?
+    fi
+    out=$(cat "$outf" 2>/dev/null); rm -f "$outf"
+    dur=$(( $(date +%s) - start ))
+    total_dur=$((total_dur + dur))
+
+    # 成功或超时：跳出重试循环
+    if (( rc == 0 )) && [[ -n "$out" ]]; then break; fi
+    if (( rc == 124 )); then break; fi
+
+    # 失败：采集错误信息，准备重试（或最终报错）
+    last_err=$(tail -c 800 "$err" 2>/dev/null)
+    if (( attempt <= MAX_RETRY )); then
+      log "FAIL-WILL-RETRY mid=$mid rc=$rc attempt=$attempt err=${last_err:0:120}"
+    fi
+  done
+
+  # ---- 结果处理 ----
   if (( rc == 124 )); then
     reply "$mid" text "⏱️ 分析超时（>${TASK_TIMEOUT_SECS}s）已终止。可缩小问题范围后重试。"
-    audit "$mid" "$chat" "$sender" "timeout" "$dur" "$task"
+    audit "$mid" "$chat" "$sender" "timeout" "$total_dur" "$task"
   elif (( rc != 0 )) || [[ -z "$out" ]]; then
+    # 原始报错只留 owner 本机，绝不回贴进群：claude/取数 stderr 常含 $HOME 真实路径（暴露 owner
+    # 用户名/目录结构）、内部表名/SQL、报错栈——回贴进群=向同群（可能含无权）成员泄露内部信息（红队 #10）。
     local tail; tail=$(tail -c 400 "$err" 2>/dev/null)
-    local owner_hint=""; [[ -n "$OWNER_AT" ]] && owner_hint=$' <at user_id="'"$OWNER_AT"$'">owner</at> 请确认 mc-query/datawind 登录是否过期。'
-    reply "$mid" markdown "❌ 分析失败（rc=$rc）。若是数据系统登录过期（cookie 失效），需要 owner 在本机重新登录后重试。${owner_hint}"$'\n\n```\n'"${tail}"$'\n```'
-    audit "$mid" "$chat" "$sender" "fail" "$dur" "$task"
-    log "FAIL mid=$mid rc=$rc err=${tail:0:120}"
+    { printf '%s [FAIL] mid=%s rc=%s attempt=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$mid" "$rc" "$attempt"
+      printf '%s\n\n' "$tail"; } >> "$STATE_DIR/fail.log"
+    local owner_hint=""; [[ -n "$OWNER_AT" ]] && owner_hint=$' <at user_id="'"$OWNER_AT"$'">owner</at> 请确认 mc-query/datawind 登录是否过期，详细报错见本机 fail.log。'
+    local retry_note=""; (( attempt > 1 )) && retry_note="（已自动重试 $((attempt-1)) 次仍失败）"
+    reply "$mid" markdown "❌ 分析失败${retry_note}。常见原因是数据系统登录过期（cookie 失效），需 owner 在本机重新登录后重试。详细报错已留在 owner 本机日志，未贴进群以免泄露内部信息。${owner_hint}"
+    audit "$mid" "$chat" "$sender" "fail" "$total_dur" "$task"
+    log "FAIL mid=$mid rc=$rc attempt=$attempt err=${tail:0:120}"
   else
+    # 成功：保存到记忆目录（供 memory-harvest.py 提取 exemplars）
+    save_to_memory "$mid" "$task" "$out"
+
     if (( ${#out} > REPLY_FILE_THRESHOLD )); then
       local f="$STATE_DIR/report.$mid.md"; printf '%s\n' "$out" > "$f"
-      reply "$mid" text "✅ 分析完成（报告较长，见附件）。耗时 ${dur}s。"
+      reply "$mid" text "✅ 分析完成（报告较长，见附件）。耗时 ${total_dur}s。"
       reply "$mid" file "$f"
       rm -f "$f"
     else
       reply "$mid" markdown "$out"
     fi
-    audit "$mid" "$chat" "$sender" "ok" "$dur" "$task"
-    log "OK mid=$mid dur=${dur}s"
+    local status="ok"; (( attempt > 1 )) && status="ok_after_retry"
+    audit "$mid" "$chat" "$sender" "$status" "$total_dur" "$task"
+    log "OK mid=$mid dur=${total_dur}s attempt=$attempt"
   fi
   rm -f "$err"
 }
 
-# ---------- 4. 事件分发（含全部护栏）----------
+# ---------- 5. 事件分发（含全部护栏）----------
 in_list() {  # $1=needle, $2=space-separated haystack（空 haystack 视配置语义另判）
   local x; for x in $2; do [[ "$x" == "$1" ]] && return 0; done; return 1
 }
@@ -270,9 +325,14 @@ handle_event() {
   else
     [[ "$content" != *"$BOT_NAME"* ]] && return 0
   fi
-  # 4.4 发起人白名单（留空=群内任何人可触发）
-  if [[ -n "$ALLOWED_SENDERS" ]] && ! in_list "$sender" "$ALLOWED_SENDERS"; then
-    log "DROP sender=$sender 不在白名单 mid=$mid"
+  # 4.4 发起人白名单（fail-closed）：与群白名单（4.2 空=不响应）对齐。
+  #     历史默认是「留空=群内任何人可触发」，属 fail-open——群成员资格 ≠ 数据权限，等于把 owner
+  #     的全权凭证开放给任何被拉进群的人（含跨团队/外部/离职待清退者）。已改为：留空时退回「仅
+  #     OWNER_AT 本人」；OWNER_AT 也空则没有任何人能触发（宁可不响应，也不越权取数）。
+  local sender_allow="$ALLOWED_SENDERS"
+  [[ -z "$sender_allow" ]] && sender_allow="$OWNER_AT"
+  if [[ -z "$sender_allow" ]] || ! in_list "$sender" "$sender_allow"; then
+    log "DROP sender=$sender 不在发起人白名单 mid=$mid（ALLOWED_SENDERS 空时仅允许 OWNER_AT）"
     return 0
   fi
   # 4.5 并发上限（先于日配额：忙线被拒不应消耗当日额度）
@@ -292,8 +352,19 @@ handle_event() {
   run_task "$mid" "$chat" "$sender" "$content" &
 }
 
-# ---------- 5. 主循环：消费 → 分发，consume 退出后自动重启 ----------
+# ---------- 6. 主循环：消费 → 分发，consume 退出后自动重启 ----------
 log "启动 bi-bridge：bot='$BOT_NAME' groups='$ALLOWED_GROUPS' workdir='$WORKDIR'"
+# 安全告警：发起人白名单为空时已 fail-closed 退回仅 OWNER_AT（见 4.4）。
+if [[ -z "$ALLOWED_SENDERS" ]]; then
+  if [[ -n "$OWNER_AT" ]]; then
+    log "⚠️ ALLOWED_SENDERS 为空：已退回『仅 OWNER_AT($OWNER_AT) 可触发』。建议在 config 显式列出可触发的 open_id。"
+  else
+    log "⚠️ ALLOWED_SENDERS 与 OWNER_AT 均为空：当前没有任何人能触发分析（fail-closed）。请在 config 至少填 OWNER_AT 或 ALLOWED_SENDERS。"
+  fi
+fi
+if [[ -z "$MENTION_MATCH" ]]; then
+  log "⚠️ MENTION_MATCH 为空：用 BOT_NAME 子串匹配 @（易误触发）。建议抓一条真实 @ 事件后设精确正则。"
+fi
 JQ_PROJECT='select(.chat_type=="group" and .message_type=="text") | {event_id, message_id, chat_id, sender_id, content}'
 
 while true; do

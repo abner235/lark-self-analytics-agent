@@ -1,0 +1,29 @@
+[
+  {
+    "question": "昨天各支付方式的交易金额",
+    "sql": "SELECT 支付方式, SUM(交易金额) AS 总金额, SUM(手续费) AS 总手续费 FROM Banxa订单 WHERE 日期='2026-06-27' GROUP BY 支付方式 ORDER BY 总金额 DESC",
+    "status": "verified"
+  },
+  {
+    "question": "昨天各支付方式的转化率和交易金额",
+    "sql": "WITH 漏斗 AS (SELECT 支付方式, SUM(CASE WHEN 漏斗阶段='created' THEN 用户数 ELSE 0 END) AS 创建数, SUM(CASE WHEN 漏斗阶段='completed' THEN 用户数 ELSE 0 END) AS 完成数 FROM Banxa转化漏斗 WHERE 日期='2026-06-27' GROUP BY 支付方式) SELECT 漏斗.支付方式, CAST(漏斗.完成数 AS FLOAT)/漏斗.创建数 AS 转化率, SUM(Banxa订单.交易金额) AS 总金额 FROM 漏斗 JOIN Banxa订单 ON 漏斗.支付方式=Banxa订单.支付方式 AND Banxa订单.日期='2026-06-27' GROUP BY 漏斗.支付方式, 漏斗.完成数, 漏斗.创建数",
+    "status": "verified",
+    "note": "跨表查询：漏斗表先用CTE聚合到支付方式维度，再JOIN订单表。避免stage维度导致的数据膨胀。"
+  },
+  {
+    "question": "过去7天每天的总交易金额趋势",
+    "sql": "SELECT 日期, SUM(交易金额) AS 总金额, SUM(订单数) AS 总订单数 FROM Banxa订单 WHERE 日期>='2026-06-21' GROUP BY 日期 ORDER BY 日期",
+    "status": "verified"
+  },
+  {
+    "question": "各国家客单价排名",
+    "sql": "SELECT 国家, ROUND(SUM(交易金额)/SUM(订单数), 2) AS 客单价 FROM Banxa订单 WHERE 日期='2026-06-27' GROUP BY 国家 ORDER BY 客单价 DESC",
+    "status": "verified"
+  },
+  {
+    "question": "昨天转化率和交易金额同时下跌了吗",
+    "sql": "WITH 今日漏斗 AS (SELECT SUM(CASE WHEN 漏斗阶段='completed' THEN 用户数 ELSE 0 END)*1.0/SUM(CASE WHEN 漏斗阶段='created' THEN 用户数 ELSE 0 END) AS 转化率 FROM Banxa转化漏斗 WHERE 日期='2026-06-27'), 昨日漏斗 AS (SELECT SUM(CASE WHEN 漏斗阶段='completed' THEN 用户数 ELSE 0 END)*1.0/SUM(CASE WHEN 漏斗阶段='created' THEN 用户数 ELSE 0 END) AS 转化率 FROM Banxa转化漏斗 WHERE 日期='2026-06-26'), 今日金额 AS (SELECT SUM(交易金额) AS 金额 FROM Banxa订单 WHERE 日期='2026-06-27'), 昨日金额 AS (SELECT SUM(交易金额) AS 金额 FROM Banxa订单 WHERE 日期='2026-06-26') SELECT ROUND(今日漏斗.转化率*100,1) AS 今日转化率, ROUND(昨日漏斗.转化率*100,1) AS 昨日转化率, ROUND(今日金额.金额,0) AS 今日金额, ROUND(昨日金额.金额,0) AS 昨日金额 FROM 今日漏斗, 昨日漏斗, 今日金额, 昨日金额",
+    "status": "verified",
+    "note": "环比对比：用CTE分别算两天的指标，最后CROSS JOIN合并。不需要显式JOIN key。"
+  }
+]

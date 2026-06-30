@@ -1,4 +1,4 @@
-<!-- 本文件由 prompts/ 模块组装生成。修改请编辑 prompts/ 下的对应文件，然后运行 python3 skills_builder.py 重新生成。 -->
+# bi-bridge-analyst
 
 # 角色与边界
 
@@ -106,4 +106,57 @@ BI-BRIDGE-SQL -->
 
 1. 不要硬编一个数。
 2. 直接在回复里说明：取数失败、疑似登录过期、需要 owner 在本机重新登录后重试。
-3. 不要把原始报错、内部表名/库名、字段名、本机文件路径、SQL 全文贴进回复——这些会泄露给同群可能无权的成员。只给一句人类可读的失败说明，原始报错留给 owner 看本机日志。
+3. 把关键报错信息附上。
+
+## Schema
+
+Table=[Banxa转化漏斗], PartitionTimeField=[日期 FORMAT 'yyyy-MM-dd']
+Metrics=[<用户数 ALIAS '人数;用户量' AGGREGATE 'SUM' COMMENT '该阶段的用户人数，已按 (日期, 国家, 支付方式, 阶段) 预聚合。
+聚合函数用 SUM。跨日期或跨国家汇总时 SUM(users) 是正确的，但必须同时保留 stage 维度或先用 WHERE 筛选到单一阶段。
+直接 SUM(users) 不加 stage 筛选会把 5 个阶段的人数混在一起，结果没有业务含义。
+'>]
+Dimensions=[
+  <日期 ALIAS '数据日期;分区日期' DATATYPE 'date' FORMAT 'yyyy-MM-dd' COMMENT '数据分区日期，代表该行数据对应的自然日。
+用于时间范围筛选和趋势分析。格式 yyyy-MM-dd，直接用字符串比较即可（WHERE ds >= '2024-01-01'）。
+'>,
+  <国家 ALIAS '地区;区域' DATATYPE 'varchar' COMMENT '用户所在国家/地区，存储的是国家英文名称（如 Australia、Brazil）。
+用于按地区维度对比转化效率。注意不是国家代码（不是 AU、BR），筛选时用英文全名。
+'>,
+  <支付方式 ALIAS '支付渠道;付款方式' DATATYPE 'varchar' COMMENT '用户选择的支付渠道，小写英文（如 visa、mastercard、pix、sepa、poli）。
+不同国家可用的支付方式不同。筛选时用小写匹配，不要用中文名称。
+'>,
+  <漏斗阶段 ALIAS '环节;步骤;转化阶段' DATATYPE 'varchar' COMMENT '转化漏斗环节，每行只属于一个阶段。五个阶段按先后顺序排列：
+created → kyc_passed → pay_submitted → pay_authorized → completed。
+计算转化率时用条件聚合：SUM(CASE WHEN stage='pay_submitted' THEN users END) / SUM(CASE WHEN stage='created' THEN users END)。
+不要用 GROUP BY stage 再做行间除法，容易出错。
+'>
+]
+Values=[<漏斗阶段='created(订单创建)','kyc_passed(KYC 通过)','pay_submitted(支付提交)','pay_authorized(支付授权)','completed(交易完成)'>]
+
+Table=[Banxa订单], PartitionTimeField=[日期 FORMAT 'yyyy-MM-dd']
+Metrics=[<订单数 ALIAS '成交笔数;成交单数' AGGREGATE 'SUM' COMMENT '成交订单数量，已按 (日期, 国家, 支付方式) 预聚合。
+聚合函数用 SUM，跨行汇总时对预聚合的计数值求和。
+计算客单价：SUM(amount_usd) / SUM(orders)。不要用 AVG(amount_usd)，那是对已聚合行求均值，含义不同。
+'>, <交易金额 ALIAS '成交金额;金额;GMV' AGGREGATE 'SUM' COMMENT '成交交易金额，单位美元（USD），已按 (日期, 国家, 支付方式) 预聚合。
+聚合函数用 SUM。这是法币入金金额，用户用法币购买加密货币的支付总额。
+计算费率：SUM(fee_usd) / SUM(amount_usd)。注意分母不能为零，建议加 NULLIF。
+'>, <手续费 ALIAS '费用;佣金' AGGREGATE 'SUM' COMMENT '收取的手续费，单位美元（USD），已按 (日期, 国家, 支付方式) 预聚合。
+聚合函数用 SUM。这是 Banxa 向用户收取的服务费，是收入侧指标。
+手续费率 = SUM(fee_usd) / SUM(amount_usd)，通常在 1%-5% 区间。
+'>]
+Dimensions=[
+  <日期 ALIAS '数据日期' DATATYPE 'date' FORMAT 'yyyy-MM-dd' COMMENT '数据分区日期，代表该行数据对应的自然日。
+格式 yyyy-MM-dd，直接用字符串比较即可（WHERE ds >= '2024-01-01'）。
+'>,
+  <国家 ALIAS '地区' DATATYPE 'varchar' COMMENT '用户所在国家/地区，存储的是国家英文名称（如 Australia、Brazil）。
+筛选时用英文全名，不是国家代码。
+'>,
+  <支付方式 ALIAS '支付渠道' DATATYPE 'varchar' COMMENT '用户选择的支付渠道，小写英文（如 visa、mastercard、pix）。
+筛选时用小写匹配。
+'>
+]
+
+
+## 表间关系
+- Banxa订单 ↔ Banxa转化漏斗: JOIN key = (日期, 国家, 支付方式)
+  ⚠️ 漏斗表每个key组合有5行(对应5个阶段)，JOIN前需先筛选阶段或用CTE聚合

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# mcq-safe — 校验 + 映射 + 执行的完整链路
+#
+# 语义 SQL → 校验字段合法性 → 映射为物理 SQL → 执行
+#
+# 用法: ./mcq-safe "SELECT 日期, SUM(用户数) FROM Banxa转化漏斗 GROUP BY 日期"
+set -o pipefail
+
+SANDBOX_DIR="$(cd "$(dirname "$0")" && pwd)"
+BRIDGE_DIR="$(dirname "$SANDBOX_DIR")"
+
+sql="$*"
+if [[ -z "$sql" ]]; then
+  echo "用法: mcq-safe \"<语义SQL>\"" >&2
+  exit 2
+fi
+
+# Step 1: 校验
+validation=$(python3 "$BRIDGE_DIR/sql-validator.py" "$sql" 2>&1)
+exit_code=$?
+if [[ $exit_code -ne 0 ]]; then
+  echo "⚠️ SQL 校验失败:" >&2
+  echo "$validation" >&2
+  echo "" >&2
+  echo "请检查字段名是否正确，参考 Schema 定义中的字段。" >&2
+  exit 1
+fi
+
+# Step 2: 映射 + 执行
+physical_sql=$(python3 "$BRIDGE_DIR/sql-mapper.py" "$sql")
+if [[ $? -ne 0 ]]; then
+  echo "SQL 映射失败" >&2
+  exit 1
+fi
+
+exec "$SANDBOX_DIR/mcq" "$physical_sql"

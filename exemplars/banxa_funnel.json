@@ -1,0 +1,28 @@
+[
+  {
+    "question": "昨天整体转化率是多少",
+    "sql": "SELECT 日期, CAST(SUM(CASE WHEN 漏斗阶段='completed' THEN 用户数 ELSE 0 END) AS FLOAT) / SUM(CASE WHEN 漏斗阶段='created' THEN 用户数 ELSE 0 END) AS 转化率 FROM Banxa转化漏斗 WHERE 日期='2026-06-27' GROUP BY 日期",
+    "status": "verified"
+  },
+  {
+    "question": "过去7天各支付方式的转化率趋势",
+    "sql": "WITH 创建 AS (SELECT 日期, 支付方式, SUM(用户数) AS 创建数 FROM Banxa转化漏斗 WHERE 漏斗阶段='created' AND 日期>='2026-06-21' GROUP BY 日期, 支付方式), 完成 AS (SELECT 日期, 支付方式, SUM(用户数) AS 完成数 FROM Banxa转化漏斗 WHERE 漏斗阶段='completed' AND 日期>='2026-06-21' GROUP BY 日期, 支付方式) SELECT 创建.日期, 创建.支付方式, 创建数, 完成数, CAST(完成数 AS FLOAT)/创建数 AS 转化率 FROM 创建 JOIN 完成 ON 创建.日期=完成.日期 AND 创建.支付方式=完成.支付方式 ORDER BY 创建.日期, 创建.支付方式",
+    "status": "verified"
+  },
+  {
+    "question": "昨天哪一步漏斗掉得最多",
+    "sql": "SELECT 漏斗阶段, SUM(用户数) AS 用户数 FROM Banxa转化漏斗 WHERE 日期='2026-06-27' GROUP BY 漏斗阶段",
+    "status": "verified",
+    "note": "取各阶段绝对数后在分析层逐级对比，不在 SQL 里做相邻阶段的 join"
+  },
+  {
+    "question": "visa 昨天的转化漏斗详情",
+    "sql": "SELECT 漏斗阶段, SUM(用户数) AS 用户数 FROM Banxa转化漏斗 WHERE 日期='2026-06-27' AND 支付方式='visa' GROUP BY 漏斗阶段",
+    "status": "verified"
+  },
+  {
+    "question": "昨天各国家的完成人数对比",
+    "sql": "SELECT 国家, SUM(用户数) AS 完成人数 FROM Banxa转化漏斗 WHERE 日期='2026-06-27' AND 漏斗阶段='completed' GROUP BY 国家 ORDER BY 完成人数 DESC",
+    "status": "verified"
+  }
+]

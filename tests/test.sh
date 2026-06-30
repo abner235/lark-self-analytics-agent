@@ -156,6 +156,52 @@ run_bridge 3
 [ ! -e "$TMP/state/counter.2025-01-01" ]   && ok "过期 counter 被清理"    || bad "过期 counter 未清理"
 [ -e "$TMP/state/seen/fresh_event" ]       && ok "新文件保留（不误删）"   || bad "误删了新文件"
 
+# ---------------- 测试 F：纠正链 — 首次失败后自动重试成功 ----------------
+echo "[F] 纠正链 / 自动重试"
+# claude stub：第 1 次返回失败（rc=1），第 2 次返回成功
+cat > "$TMP/bin/claude" <<'STUBEOF'
+#!/usr/bin/env bash
+COUNTER_F="$HOME/.bibridge_test_retry_counter"
+n=$(cat "$COUNTER_F" 2>/dev/null || echo 0)
+n=$((n + 1)); echo "$n" > "$COUNTER_F"
+if [ "$n" -le 1 ]; then
+  echo "ERROR: mc-query connection refused" >&2; exit 1
+else
+  echo "**结论**：重试成功，转化率 42%"
+fi
+STUBEOF
+chmod +x "$TMP/bin/claude"
+rm -f "$HOME/.bibridge_test_retry_counter"
+cat > "$TMP/events.ndjson" <<'EOF'
+{"event_id":"f1","message_id":"om_f1","chat_id":"oc_good","sender_id":"ou_alice","content":"@TestBot 转化率"}
+EOF
+mk_lark_stub "$TMP/events.ndjson"
+base_cfg 'export MAX_RETRY=1'
+run_bridge 8
+rm -f "$HOME/.bibridge_test_retry_counter"
+
+grep -q '"status":"ok_after_retry"' "$TMP/state/invocations.jsonl" 2>/dev/null && ok "重试成功记为 ok_after_retry" || bad "未记录 ok_after_retry"
+grep -q '重试' "$TMP/replies.log" 2>/dev/null && ok "通知用户正在重试" || bad "未通知用户重试"
+grep -q '转化率' "$TMP/replies.log" 2>/dev/null && ok "最终回贴了分析结果" || bad "未回贴分析结果"
+
+# ---------------- 测试 G：成功报告保存到 memory 目录 ----------------
+echo "[G] 记忆保存 / memory 目录"
+printf '#!/usr/bin/env bash\necho "**结论**：测试报告"\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+cat > "$TMP/events.ndjson" <<'EOF'
+{"event_id":"g1","message_id":"om_g1","chat_id":"oc_good","sender_id":"ou_alice","content":"@TestBot 昨天订单数"}
+EOF
+mk_lark_stub "$TMP/events.ndjson"
+base_cfg ""
+run_bridge 4
+md_count=$(find "$TMP/state/memory" -name '*.md' -not -path '*/processed/*' 2>/dev/null | wc -l | tr -d ' ')
+meta_count=$(find "$TMP/state/memory" -name '*.meta.json' -not -path '*/processed/*' 2>/dev/null | wc -l | tr -d ' ')
+[ "$md_count" -ge 1 ] && ok "报告保存到 memory/*.md" || bad "未保存报告（md=$md_count）"
+[ "$meta_count" -ge 1 ] && ok "元数据保存到 memory/*.meta.json" || bad "未保存元数据（meta=$meta_count）"
+if [ "$meta_count" -ge 1 ]; then
+  meta_file=$(find "$TMP/state/memory" -name '*.meta.json' -not -path '*/processed/*' 2>/dev/null | head -1)
+  jq -e '.question' "$meta_file" >/dev/null 2>&1 && ok "元数据含 question 字段" || bad "元数据缺 question"
+fi
+
 echo
 echo "==== 结果：PASS=$PASS  FAIL=$FAIL ===="
 [ "$FAIL" = "0" ]
